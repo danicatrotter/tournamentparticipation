@@ -65,6 +65,7 @@ export default function App() {
   const [email,       setEmail]       = useState("");
   const [division,    setDivision]    = useState("JL");
   const [numDays,     setNumDays]     = useState(3);
+  const [finalsTeams, setFinalsTeams] = useState(4);
   const [days,        setDays]        = useState([emptyDay(0),emptyDay(1),emptyDay(2)]);
   const [teams,       setTeams]       = useState(() => [emptyTeam(3), emptyTeam(3)]);
   const [sheetUrl,    setSheetUrl]    = useState("");
@@ -152,8 +153,8 @@ export default function App() {
     if (!startDate) { alert("Please enter the tournament start date."); return; }
     setStep(2);
     try {
-      const teamsPayload = teams.map(t => ({
-        name: t.name || "Team",
+      const teamsPayload = teams.map((t,i) => ({
+        name: t.name.trim() || `Team ${i+1}`,
         days: days.map((d,i) => {
           const sched = t.schedule && t.schedule.find(s=>s.dayIdx===i);
           return { label:d.label, games: sched ? sched.games : 1 };
@@ -168,7 +169,10 @@ export default function App() {
       const res = await fetch("/api/create-sheet", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ tournamentName:tourneyName, startDate, email, division, teams:teamsPayload })
+        body: JSON.stringify({
+          tournamentName:tourneyName, startDate, email, division, teams:teamsPayload,
+          finalsTeams: Math.min(finalsTeams, teams.length),
+        })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error||"Unknown error");
@@ -178,7 +182,7 @@ export default function App() {
       setErrMsg(err.message);
       setStep(4);
     }
-  }, [tourneyName, startDate, email, division, days, teams]);
+  }, [tourneyName, startDate, email, division, days, teams, finalsTeams]);
 
   // ── Styles ─────────────────────────────────────────────────────────────────
   const inp = {
@@ -235,6 +239,9 @@ export default function App() {
         <strong style={{color:"#c8a84b", display:"block", marginBottom:6}}>📁 To make yourself the owner:</strong>
         Open the spreadsheet, then go to <strong style={{color:"#e8dcc8"}}>File → Make a copy</strong>.
         Your copy will be fully owned by you in your Google Drive and you can rename or move it as needed.
+        <div style={{marginTop:8,color:"#c8a84b"}}>
+          🏆 The Ladder only updates automatically in the original sheet. Enter pool play results there, not in a copy.
+        </div>
       </div>
 
       <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap",justifyContent:"center"}}>
@@ -252,6 +259,7 @@ export default function App() {
           setEmail("");
           setDivision("JL");
           setNumDays(3);
+          setFinalsTeams(4);
           setDays([emptyDay(0),emptyDay(1),emptyDay(2)]);
           setTeams([emptyTeam(3),emptyTeam(3)]);
           setSheetUrl("");
@@ -311,12 +319,20 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{marginBottom:16}}>
-            <label style={lbl}>Competition Division</label>
-            <select style={sel} value={division} onChange={e=>setDivision(e.target.value)}>
-              {DIVISIONS.map(d=><option key={d} value={d}>{DIVISION_NAMES[d]}</option>)}
-            </select>
-            <div style={{...sub, color:"#8fa8c8", marginTop:6}}>{DIVISION_INFO[division]}</div>
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12,marginBottom:16}}>
+            <div>
+              <label style={lbl}>Competition Division</label>
+              <select style={sel} value={division} onChange={e=>setDivision(e.target.value)}>
+                {DIVISIONS.map(d=><option key={d} value={d}>{DIVISION_NAMES[d]}</option>)}
+              </select>
+              <div style={{...sub, color:"#8fa8c8", marginTop:6}}>{DIVISION_INFO[division]}</div>
+            </div>
+            <div>
+              <label style={lbl}>Teams Advancing to Finals</label>
+              <input style={inp} type="number" min={0} max={teams.length} value={finalsTeams}
+                onChange={e=>setFinalsTeams(Math.max(0, Math.min(20, Number(e.target.value)||0)))}/>
+              <div style={sub}>Top teams on the ladder are seeded for finals. Set by the tournament director before play starts.</div>
+            </div>
           </div>
 
           {/* Divider */}

@@ -18,6 +18,9 @@ function doPost(e) {
 }
 
 function doGet(e) {
+  if(e&&e.parameter&&e.parameter.action==="ladder"&&e.parameter.id){
+    return refreshLadderPage(e.parameter.id); // see Ladder.gs
+  }
   return ContentService.createTextOutput(
     JSON.stringify({ ok:true, status:"Tournament Participation Tracker running" })
   ).setMimeType(ContentService.MimeType.JSON);
@@ -126,20 +129,44 @@ function createTournamentSheet(data) {
   var teams=data.teams||[];
   var email=data.email||"";
   var division=data.division||"JL";
+  var finalsTeams=Math.max(0,Math.min(Number(data.finalsTeams)||0,teams.length));
+
+  // Team names drive the ladder and tab names, so they must be unique
+  var usedNames={};
+  teams.forEach(function(team,i){
+    var base=String(team.name||"").trim()||("Team "+(i+1));
+    var name=base, n=2;
+    while(usedNames[name.toLowerCase()]) name=base+" ("+(n++)+")";
+    usedNames[name.toLowerCase()]=true;
+    team.name=name;
+  });
 
   var ss=SpreadsheetApp.create(tournamentName);
   var spreadsheetId=ss.getId();
   var defaultSheet=ss.getSheets()[0];
 
+  var webAppUrl="";
+  try{ webAppUrl=ScriptApp.getService().getUrl()||""; }catch(e){}
+  var cfg={
+    tournamentName:tournamentName,startDate:startDate,division:division,teams:teams,
+    finalsTeams:finalsTeams,spreadsheetId:spreadsheetId,webAppUrl:webAppUrl
+  };
+
   var configSheet=ss.insertSheet("__config__");
-  configSheet.getRange(1,1).setValue(JSON.stringify({
-    tournamentName:tournamentName,startDate:startDate,division:division,teams:teams
-  }));
+  configSheet.getRange(1,1).setValue(JSON.stringify(cfg));
   configSheet.hideSheet();
 
   var instrSheet=ss.insertSheet("📋 Instructions — "+division);
   SpreadsheetApp.flush();
   buildInstructionsSheet(instrSheet,division,tournamentName);
+  SpreadsheetApp.flush();
+
+  // Ladder + Results (see Ladder.gs)
+  var ladderSheet=ss.insertSheet(LADDER_SHEET);
+  var resultsSheet=ss.insertSheet(RESULTS_SHEET);
+  buildResultsSheet(resultsSheet,cfg);
+  SpreadsheetApp.flush();
+  updateLadder(ss);
   SpreadsheetApp.flush();
 
   teams.forEach(function(team){
@@ -153,8 +180,18 @@ function createTournamentSheet(data) {
   });
 
   try{ss.deleteSheet(defaultSheet);}catch(e){}
+  ss.setActiveSheet(ladderSheet);
+  ss.moveActiveSheet(1);
+  ss.setActiveSheet(resultsSheet);
+  ss.moveActiveSheet(2);
   ss.setActiveSheet(instrSheet);
   ss.moveActiveSheet(1);
+
+  // Auto-update the ladder when results are entered. If this fails (e.g. the
+  // script has not been re-authorised for triggers) the sheet is still created
+  // and the "Recalculate ladder" link on the Ladder tab still works.
+  try{ installLadderTrigger(ss); }
+  catch(e){ Logger.log("Ladder trigger not installed: "+e.message); }
 
   if(email){
     DriveApp.getFileById(spreadsheetId).addEditor(email);
@@ -168,7 +205,9 @@ function createTournamentSheet(data) {
         "─────────────────────────────\n"+
         "TO MAKE YOURSELF THE OWNER:\n"+
         "Open the spreadsheet, then go to File → Make a copy.\n"+
-        "Your copy will be fully owned by you in your Google Drive.\n"+
+        "Your copy will be fully owned by you in your Google Drive.\n\n"+
+        "Note: the Ladder only updates automatically in the ORIGINAL sheet.\n"+
+        "Enter pool play results in the original, not in a copy.\n"+
         "─────────────────────────────",
     });
   }
@@ -953,11 +992,24 @@ function buildInstructionsSheet(sh,division,tournamentName) {
   write(row,"⛔ Rest","Player is within a mandatory rest period based on their Start value from a previous day.",true);row++;
   blank(row);row++;
 
+  var reg=getRegulationInnings(division);
+  heading(row,"LADDER & FINALS SEEDING");row++;
+  write(row,"Entering results","Open the 📝 Results tab and enter each POOL PLAY game: home team, runs, away team, runs. Only fill Innings if the game went to extra innings. Do not enter finals games. The 🏆 Ladder tab updates automatically within a few seconds.",true);row++;
+  write(row,"Points","Win 2 · Draw 1 · Loss 0. Teams are ranked on points.",true);row++;
+  write(row,"Tiebreaker 1 - Head-to-head","A tied team advances only if it beat EVERY other team in the tie, in EVERY pool game between them, AND played each of them an equal number of times. The remaining tied teams then go back to this step.",true);row++;
+  write(row,"Tiebreaker 2 - Runs-allowed ratio","When head-to-head cannot separate the teams: total runs allowed in all pool games ÷ defensive innings ("+reg+" per game, or more for extra innings). Lowest ratio advances, and each next place is decided the same way.\nExample: 8 runs allowed in 4 games = 8 ÷ "+(reg*4)+" = "+(8/(reg*4)).toFixed(4)+".",true);row++;
+  write(row,"Tiebreaker 3 - Still level on RA ratio","Head-to-head between those teams. If that cannot be used, the RA ratio is recalculated using only games between those teams. This advances ONE team, then the rest go back to the all-games RA ratio.",true);row++;
+  write(row,"Still tied","Marked ⚠️ on the Ladder. The Tournament Committee decides (playoff, blind draw or coin flip).",true);row++;
+  write(row,"Finals","The top teams (as set when this tracker was created) are highlighted and listed as seeds. Forfeits are usually recorded as "+reg+"-0, but only the Tournament Committee can decree a forfeit.",true);row++;
+  write(row,"Not updating?","Click 🔄 Recalculate ladder at the bottom of the Ladder tab.",true);row++;
+  blank(row);row++;
+
   heading(row,"MAKING YOURSELF THE OWNER");row++;
   full(row,
     "This spreadsheet was shared to your email as Editor. "+
     "To become the full owner: go to File → Make a copy. "+
-    "Your copy will be fully owned by you in Google Drive.",PALE,DARK);row++;
+    "Your copy will be fully owned by you in Google Drive.\n"+
+    "Note: the Ladder only updates automatically in this ORIGINAL sheet. Enter pool play results here, not in a copy.",PALE,DARK);row++;
   blank(row);row++;
 
   sh.getRange(row,1,1,2).merge()
