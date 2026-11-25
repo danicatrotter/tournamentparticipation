@@ -10,8 +10,23 @@ Google Sheet.
 - `apps-script/Code.gs`: sheet builder (pitch counts, rest days, eligibility
   STATUS formulas, instructions tab). Deployed by pasting into the Apps Script
   editor; the repo copy is the source of truth.
-- `apps-script/Ladder.gs`: Results tab, Ladder tab, tiebreakers, finals seeding,
-  edit trigger. Ranking core is pure JS, tested by `npm test`.
+- `apps-script/Ladder.gs`: Results tab, Ladder tab, both ladder rule sets,
+  finals seeding, edit trigger. Ranking core is pure JS, tested by `npm test`.
+- `apps-script/ExistingSheets.gs`: tools for already-created sheets (list teams,
+  add players with full formulas, add a ladder to an old tracker).
+- `src/pages/existing.jsx`: "Existing Tracker" screen; `src/pages/shared.js`:
+  shared styles and helpers.
+
+## Ladder rule sets (chosen per tournament, `cfg.ladderSystem`)
+
+- **LL** (default for LL/IL/JL/SL): Little League pool play rules, below.
+- **PCT** (default for AYC U16/U18, AWC, AYWC): rank on points % = points ÷
+  (2 × games with an official result) × 100; ties by runs allowed per inning
+  defended (lower), then TQB (higher), then coin toss. No head-to-head. Uses
+  official-result runs and innings, entered per team; games not finished with
+  full innings revert to the last completed inning; a run-cap half-inning rolls
+  back to the last completed inning. Full text: `docs/points-percentage-ladder.md`.
+- Both: a game ticked "No Result" (abandoned, no official result) is excluded.
 
 Divisions: LL, IL, JL, SL (Little League rules, league age) and AYC U16, AYC U18,
 AWC, AYWC (Australian / WBSC technical norms, actual age).

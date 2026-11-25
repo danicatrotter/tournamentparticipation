@@ -1,4 +1,9 @@
 import { useState, useCallback } from "react";
+import ExistingTracker from "./existing.jsx";
+import {
+  uid, parseRosterPaste, LADDER_SYSTEMS, defaultLadderSystem, callApi,
+  inp, sel, lbl, sub, card, sec, secT, divider, btn,
+} from "./shared.js";
 
 const DAYS_OF_WEEK = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DIVISIONS = ["LL","IL","JL","SL","AYC U16","AYC U18","AWC","AYWC"];
@@ -27,7 +32,6 @@ const DIVISION_INFO = {
   "AYWC":   "Max 16 players · Actual age at tournament start · One outing per day only",
 };
 
-const uid = () => Math.random().toString(36).slice(2,8);
 const emptyPlayer = () => ({ id:uid(), surname:"", firstName:"", number:"", dob:"" });
 const emptyTeam   = (dayCount) => ({
   id:uid(), name:"",
@@ -35,17 +39,6 @@ const emptyTeam   = (dayCount) => ({
   players:[emptyPlayer()]
 });
 const emptyDay = (i) => ({ id:uid(), label:DAYS_OF_WEEK[i%7] });
-
-const parseDob = (raw) => {
-  if (!raw) return "";
-  raw = raw.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  let m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (m) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
-  const d = new Date(raw);
-  if (!isNaN(d)) return d.toISOString().slice(0,10);
-  return raw;
-};
 
 // Auto-fill day labels from a start date
 const getDayLabels = (startDateStr, count) => {
@@ -66,6 +59,8 @@ export default function App() {
   const [division,    setDivision]    = useState("JL");
   const [numDays,     setNumDays]     = useState(3);
   const [finalsTeams, setFinalsTeams] = useState(4);
+  const [ladderSystem,setLadderSystem]= useState(defaultLadderSystem("JL"));
+  const [mode,        setMode]        = useState("new");  // "new" | "existing"
   const [days,        setDays]        = useState([emptyDay(0),emptyDay(1),emptyDay(2)]);
   const [teams,       setTeams]       = useState(() => [emptyTeam(3), emptyTeam(3)]);
   const [sheetUrl,    setSheetUrl]    = useState("");
@@ -128,15 +123,7 @@ export default function App() {
   const applyPaste = (tid) => {
     const text = (pasteText[tid]||"").trim();
     if (!text) { setPasteErr(e=>({...e,[tid]:"Nothing to import."})); return; }
-    const rows = text.split(/\r?\n/).filter(r=>r.trim());
-    const players = [];
-    rows.forEach(row => {
-      const cols = row.split(/\t/).map(c=>c.trim());
-      if (cols.length < 2) return;
-      const [surname,firstName,number="",dobRaw=""] = cols;
-      if (!surname&&!firstName) return;
-      players.push({id:uid(),surname,firstName,number,dob:parseDob(dobRaw)});
-    });
+    const players = parseRosterPaste(text);
     if (!players.length) {
       setPasteErr(e=>({...e,[tid]:"No valid rows. Copy data rows only — do not include the header row."}));
       return;
@@ -166,45 +153,17 @@ export default function App() {
           dob:       p.dob       || "",
         })),
       }));
-      const res = await fetch("/api/create-sheet", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({
-          tournamentName:tourneyName, startDate, email, division, teams:teamsPayload,
-          finalsTeams: Math.min(finalsTeams, teams.length),
-        })
+      const data = await callApi({
+        tournamentName:tourneyName, startDate, email, division, teams:teamsPayload,
+        finalsTeams: Math.min(finalsTeams, teams.length), ladderSystem,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error||"Unknown error");
       setSheetUrl(data.url);
       setStep(3);
     } catch(err) {
       setErrMsg(err.message);
       setStep(4);
     }
-  }, [tourneyName, startDate, email, division, days, teams, finalsTeams]);
-
-  // ── Styles ─────────────────────────────────────────────────────────────────
-  const inp = {
-    background:"rgba(255,255,255,0.07)", border:"1px solid rgba(200,168,75,0.3)",
-    borderRadius:6, padding:"8px 10px", color:"#e8dcc8", fontSize:"0.88rem",
-    outline:"none", width:"100%", boxSizing:"border-box", fontFamily:"inherit",
-  };
-  const sel  = {...inp, background:"#0d2040", cursor:"pointer"};
-  const lbl  = { fontSize:"0.73rem", color:"#8fa8c8", marginBottom:4, display:"block", letterSpacing:"0.04em" };
-  const sub  = { fontSize:"0.7rem", color:"#5a7a9a", marginTop:3 };
-  const card = { background:"rgba(255,255,255,0.035)", border:"1px solid rgba(200,168,75,0.2)", borderRadius:10, padding:"18px", marginBottom:14 };
-  const sec  = { background:"rgba(255,255,255,0.04)", border:"1px solid rgba(200,168,75,0.25)", borderRadius:12, padding:"22px", marginTop:20 };
-  const secT = { fontSize:"0.88rem", fontWeight:"bold", color:"#c8a84b", textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:16 };
-  const divider = { borderTop:"1px solid rgba(200,168,75,0.15)", margin:"18px 0" };
-  const btn  = (v="gold") => ({
-    padding: v==="sm"?"5px 12px":"11px 24px", borderRadius:6, border:"none",
-    cursor:"pointer", fontWeight:"bold", fontSize:v==="sm"?"0.76rem":"0.88rem",
-    letterSpacing:"0.05em", fontFamily:"inherit",
-    background: v==="danger"?"rgba(180,50,50,0.7)":v==="ghost"?"rgba(255,255,255,0.07)":"linear-gradient(135deg,#c8a84b,#a07830)",
-    color: v==="ghost"?"#8fa8c8":"#0a1628",
-    border: v==="ghost"?"1px solid rgba(200,168,75,0.2)":"none",
-  });
+  }, [tourneyName, startDate, email, division, days, teams, finalsTeams, ladderSystem]);
 
   // ── Step screens ───────────────────────────────────────────────────────────
   if (step===2) return (
@@ -260,6 +219,7 @@ export default function App() {
           setDivision("JL");
           setNumDays(3);
           setFinalsTeams(4);
+          setLadderSystem(defaultLadderSystem("JL"));
           setDays([emptyDay(0),emptyDay(1),emptyDay(2)]);
           setTeams([emptyTeam(3),emptyTeam(3)]);
           setSheetUrl("");
@@ -292,10 +252,22 @@ export default function App() {
       <div style={{background:"linear-gradient(135deg,#0a1628 0%,#1a2f4e 50%,#0d2040 100%)",borderBottom:"3px solid #c8a84b",padding:"36px 32px 28px",textAlign:"center"}}>
         <div style={{fontSize:"2.2rem",marginBottom:6}}>⚾</div>
         <h1 style={{margin:"0 0 6px",fontSize:"2rem",fontWeight:"bold",color:"#c8a84b",letterSpacing:"0.1em",textTransform:"uppercase"}}>Tournament Participation Tracker</h1>
-        <p style={{margin:0,color:"#8fa8c8",fontSize:"0.88rem"}}>Fill in the details and we'll build your Google Sheet — ready to open straight away.</p>
+        <p style={{margin:0,color:"#8fa8c8",fontSize:"0.88rem"}}>
+          {mode==="existing"
+            ? "Add players or a ladder to a tracker you've already created."
+            : "Fill in the details and we'll build your Google Sheet - ready to open straight away."}
+        </p>
+        <div style={{display:"inline-flex",gap:6,marginTop:18,background:"rgba(255,255,255,0.05)",borderRadius:8,padding:4}}>
+          {[["new","⚾ New Tracker"],["existing","🔗 Existing Tracker"]].map(([k,label])=>(
+            <button key={k} onClick={()=>setMode(k)} style={{
+              ...btn(mode===k?"gold":"ghost"), padding:"8px 18px", border:"none",
+            }}>{label}</button>
+          ))}
+        </div>
       </div>
 
       <div style={{maxWidth:980,margin:"0 auto",padding:"0 20px"}}>
+      {mode==="existing" ? <ExistingTracker/> : <>
 
         {/* ── Combined Tournament Details + Days ─────────────────────────── */}
         <div style={sec}>
@@ -322,7 +294,7 @@ export default function App() {
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12,marginBottom:16}}>
             <div>
               <label style={lbl}>Competition Division</label>
-              <select style={sel} value={division} onChange={e=>setDivision(e.target.value)}>
+              <select style={sel} value={division} onChange={e=>{setDivision(e.target.value); setLadderSystem(defaultLadderSystem(e.target.value));}}>
                 {DIVISIONS.map(d=><option key={d} value={d}>{DIVISION_NAMES[d]}</option>)}
               </select>
               <div style={{...sub, color:"#8fa8c8", marginTop:6}}>{DIVISION_INFO[division]}</div>
@@ -332,6 +304,18 @@ export default function App() {
               <input style={inp} type="number" min={0} max={teams.length} value={finalsTeams}
                 onChange={e=>setFinalsTeams(Math.max(0, Math.min(20, Number(e.target.value)||0)))}/>
               <div style={sub}>Top teams on the ladder are seeded for finals. Set by the tournament director before play starts.</div>
+            </div>
+          </div>
+
+          <div style={{marginBottom:16}}>
+            <label style={lbl}>Ladder Rules</label>
+            <select style={sel} value={ladderSystem} onChange={e=>setLadderSystem(e.target.value)}>
+              {Object.entries(LADDER_SYSTEMS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+            </select>
+            <div style={sub}>
+              {ladderSystem==="PCT"
+                ? "Ranked on points % (points ÷ 2 × games with an official result). Head-to-head is not used. Enter innings batted for each team on the Results tab."
+                : "Ranked on points (win 2, draw 1, loss 0). Ties: head-to-head, then runs-allowed ratio (Little League pool play rules)."}
             </div>
           </div>
 
@@ -479,6 +463,7 @@ export default function App() {
             Your sheet will be created in Google Drive and shared to your email address.
           </div>
         </div>
+      </>}
 
       </div>
     </div>

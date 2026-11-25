@@ -1,5 +1,6 @@
 // api/create-sheet.js
-// Forwards the request to the Google Apps Script Web App
+// Forwards the request to the Google Apps Script Web App.
+// body.action selects the operation: (none) create, listTeams, addPlayers, addLadder
 // Set APPS_SCRIPT_URL in Vercel environment variables
 
 module.exports = async function handler(req, res) {
@@ -34,7 +35,9 @@ module.exports = async function handler(req, res) {
       return res.status(500).json({ error: data.error || "Apps Script error" });
     }
 
-    return res.status(200).json({ url: data.url });
+    // Pass everything back (url for new trackers, teams for listTeams, etc.)
+    delete data.ok;
+    return res.status(200).json(data);
 
   } catch(err) {
     return res.status(500).json({ error: err.message });

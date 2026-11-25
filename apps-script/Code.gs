@@ -9,8 +9,14 @@ function doPost(e) {
   output.setMimeType(ContentService.MimeType.JSON);
   try {
     var data = JSON.parse(e.postData.contents);
-    var url  = createTournamentSheet(data);
-    output.setContent(JSON.stringify({ ok:true, url:url }));
+    var result;
+    // Existing-sheet tools live in ExistingSheets.gs
+    if(data.action==="listTeams")       result=listTrackerTeams(data);
+    else if(data.action==="addPlayers") result=addPlayersToSheet(data);
+    else if(data.action==="addLadder")  result=addLadderToSheet(data);
+    else                                result={ url:createTournamentSheet(data) };
+    result.ok=true;
+    output.setContent(JSON.stringify(result));
   } catch(err) {
     output.setContent(JSON.stringify({ ok:false, error:err.message }));
   }
@@ -118,6 +124,10 @@ function getPlayerAge(dob,startDate,division) {
   return calcLeagueAge(dob,startDate);
 }
 
+function getMaxPlayers(division) {
+  return {LL:14,IL:14,JL:14,SL:16,"AYC U16":20,"AYC U18":20,AWC:18,AYWC:16}[division]||16;
+}
+
 function getDefaultAge(division) {
   return {LL:12,IL:12,JL:13,SL:15,"AYC U16":15,"AYC U18":17,AWC:17,AYWC:15}[division]||15;
 }
@@ -151,6 +161,7 @@ function createTournamentSheet(data) {
     tournamentName:tournamentName,startDate:startDate,division:division,teams:teams,
     finalsTeams:finalsTeams,spreadsheetId:spreadsheetId,webAppUrl:webAppUrl
   };
+  cfg.ladderSystem=getLadderSystem({division:division,ladderSystem:data.ladderSystem});
 
   var configSheet=ss.insertSheet("__config__");
   configSheet.getRange(1,1).setValue(JSON.stringify(cfg));
@@ -158,7 +169,7 @@ function createTournamentSheet(data) {
 
   var instrSheet=ss.insertSheet("📋 Instructions — "+division);
   SpreadsheetApp.flush();
-  buildInstructionsSheet(instrSheet,division,tournamentName);
+  buildInstructionsSheet(instrSheet,division,tournamentName,cfg.ladderSystem);
   SpreadsheetApp.flush();
 
   // Ladder + Results (see Ladder.gs)
@@ -314,25 +325,7 @@ function buildTeamSheet(sh,team,games,cols,tournamentName,startDate,division) {
   SpreadsheetApp.flush();
 
   // ── Borders ───────────────────────────────────────────────────────────────
-  if(numP>0){
-    var SM=SpreadsheetApp.BorderStyle.SOLID_MEDIUM;
-    var SO=SpreadsheetApp.BorderStyle.SOLID;
-    var DARK="#1a3a5c",MID="#999999";
-    sh.getRange(1,1,3,totalCols).setBorder(true,true,true,true,null,null,DARK,SM);
-    sh.getRange(4,1,numP,totalCols).setBorder(true,true,true,true,null,null,DARK,SM);
-    sh.getRange(1,ROSTER_COLS+1,totalRows,1).setBorder(null,true,null,null,null,null,DARK,SM);
-    games.forEach(function(g,gi){
-      var bc=ROSTER_COLS+gi*GAME_COLS+1;
-      sh.getRange(1,bc,totalRows,GAME_COLS).setBorder(true,true,true,true,null,null,DARK,SM);
-      sh.getRange(4,bc+1,numP,1).setBorder(null,true,null,null,null,null,MID,SO);
-      var si=null;
-      cols.forEach(function(col,ci){if(col.key==="STATUS") si=ci;});
-      if(si!==null&&si+1<GAME_COLS)
-        sh.getRange(4,bc+si+1,numP,1).setBorder(null,true,null,null,null,null,MID,SO);
-      sh.getRange(4,bc,numP,GAME_COLS).setBorder(null,null,null,null,null,true,"#dddddd",SO);
-    });
-    if(numP>1) sh.getRange(4,1,numP,ROSTER_COLS).setBorder(null,null,null,null,null,true,"#dddddd",SO);
-  }
+  applyTeamBorders(sh,games,cols,ROSTER_COLS,GAME_COLS,numP,totalCols);
   SpreadsheetApp.flush();
 
   // ── DOB notes ─────────────────────────────────────────────────────────────
@@ -359,6 +352,29 @@ function buildTeamSheet(sh,team,games,cols,tournamentName,startDate,division) {
     applyConditionalFormatting(sh,games,cols,ROSTER_COLS,GAME_COLS,firstRow,numP,division);
   }
   SpreadsheetApp.flush();
+}
+
+// ── Team sheet borders (also redrawn when players are added) ─────────────────
+function applyTeamBorders(sh,games,cols,ROSTER_COLS,GAME_COLS,numP,totalCols) {
+  if(numP<=0) return;
+  var totalRows=3+numP;
+  var SM=SpreadsheetApp.BorderStyle.SOLID_MEDIUM;
+  var SO=SpreadsheetApp.BorderStyle.SOLID;
+  var DARK="#1a3a5c",MID="#999999";
+  sh.getRange(1,1,3,totalCols).setBorder(true,true,true,true,null,null,DARK,SM);
+  sh.getRange(4,1,numP,totalCols).setBorder(true,true,true,true,null,null,DARK,SM);
+  sh.getRange(1,ROSTER_COLS+1,totalRows,1).setBorder(null,true,null,null,null,null,DARK,SM);
+  games.forEach(function(g,gi){
+    var bc=ROSTER_COLS+gi*GAME_COLS+1;
+    sh.getRange(1,bc,totalRows,GAME_COLS).setBorder(true,true,true,true,null,null,DARK,SM);
+    sh.getRange(4,bc+1,numP,1).setBorder(null,true,null,null,null,null,MID,SO);
+    var si=null;
+    cols.forEach(function(col,ci){if(col.key==="STATUS") si=ci;});
+    if(si!==null&&si+1<GAME_COLS)
+      sh.getRange(4,bc+si+1,numP,1).setBorder(null,true,null,null,null,null,MID,SO);
+    sh.getRange(4,bc,numP,GAME_COLS).setBorder(null,null,null,null,null,true,"#dddddd",SO);
+  });
+  if(numP>1) sh.getRange(4,1,numP,ROSTER_COLS).setBorder(null,null,null,null,null,true,"#dddddd",SO);
 }
 
 // ── Apply STATUS formulas ─────────────────────────────────────────────────────
@@ -781,7 +797,7 @@ function getDivisionInstructions(division) {
     ?"Player ages are calculated as their actual age on the tournament start date."
     :"Player ages are calculated using the Little League league age system — how old a player turns between 1 September of the previous year and 31 August of the current season year.";
 
-  var maxP={LL:14,IL:14,JL:14,SL:16,"AYC U16":20,"AYC U18":20,AWC:18,AYWC:16}[division]||16;
+  var maxP=getMaxPlayers(division);
 
   var pitchLimits,restTiers,twoGameRule,catchingRules,consecutiveRule,specialRules;
 
@@ -844,7 +860,7 @@ function getDivisionInstructions(division) {
 }
 
 // ── Build instructions sheet ──────────────────────────────────────────────────
-function buildInstructionsSheet(sh,division,tournamentName) {
+function buildInstructionsSheet(sh,division,tournamentName,ladderSystem) {
   sh.clearContents();sh.clearFormats();
   sh.setColumnWidth(1,240);sh.setColumnWidth(2,620);
 
@@ -992,17 +1008,13 @@ function buildInstructionsSheet(sh,division,tournamentName) {
   write(row,"⛔ Rest","Player is within a mandatory rest period based on their Start value from a previous day.",true);row++;
   blank(row);row++;
 
-  var reg=getRegulationInnings(division);
-  heading(row,"LADDER & FINALS SEEDING");row++;
-  write(row,"Entering results","Open the 📝 Results tab and enter each POOL PLAY game: home team, runs, away team, runs. Only fill Innings if the game went to extra innings. Do not enter finals games. The 🏆 Ladder tab updates automatically within a few seconds.",true);row++;
-  write(row,"Points","Win 2 · Draw 1 · Loss 0. Teams are ranked on points.",true);row++;
-  write(row,"Tiebreaker 1 - Head-to-head","A tied team advances only if it beat EVERY other team in the tie, in EVERY pool game between them, AND played each of them an equal number of times. The remaining tied teams then go back to this step.",true);row++;
-  write(row,"Tiebreaker 2 - Runs-allowed ratio","When head-to-head cannot separate the teams: total runs allowed in all pool games ÷ defensive innings ("+reg+" per game, or more for extra innings). Lowest ratio advances, and each next place is decided the same way.\nExample: 8 runs allowed in 4 games = 8 ÷ "+(reg*4)+" = "+(8/(reg*4)).toFixed(4)+".",true);row++;
-  write(row,"Tiebreaker 3 - Still level on RA ratio","Head-to-head between those teams. If that cannot be used, the RA ratio is recalculated using only games between those teams. This advances ONE team, then the rest go back to the all-games RA ratio.",true);row++;
-  write(row,"Still tied","Marked ⚠️ on the Ladder. The Tournament Committee decides (playoff, blind draw or coin flip).",true);row++;
-  write(row,"Finals","The top teams (as set when this tracker was created) are highlighted and listed as seeds. Forfeits are usually recorded as "+reg+"-0, but only the Tournament Committee can decree a forfeit.",true);row++;
-  write(row,"Not updating?","Click 🔄 Recalculate ladder at the bottom of the Ladder tab.",true);row++;
-  blank(row);row++;
+  if(ladderSystem){
+    writeLadderInstructions(
+      function(label,text,bold){ write(row,label,text,bold); row++; },
+      function(){ blank(row); row++; },
+      function(text){ heading(row,text); row++; },
+      division, ladderSystem);
+  }
 
   heading(row,"MAKING YOURSELF THE OWNER");row++;
   full(row,

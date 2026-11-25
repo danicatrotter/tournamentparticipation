@@ -8,12 +8,16 @@ const vm = require("node:vm");
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, "Ladder.gs"), "utf8"), ctx);
-const { computeLadder, getRegulationInnings } = ctx;
+const { computeLadder, getRegulationInnings, inningsToOuts, getDefaultLadderSystem } = ctx;
 
-// g("A 5-3 B") => home A scored 5, away B scored 3. Optional innings: "A 5-3 B 8"
+// g("A 5-3 B") => home A scored 5, away B scored 3.
+// Optional innings batted: "A 5-3 B 8" (both teams) or "A 5-3 B 5/6" (home 5, away 6).
+// Suffix " NR" marks an abandoned game with no official result.
 const g = (s) => {
-  const m = s.match(/^(\S+) (\d+)-(\d+) (\S+)(?: (\d+))?$/);
-  return { home: m[1], hr: +m[2], ar: +m[3], away: m[4], innings: m[5] ? +m[5] : 0 };
+  const m = s.match(/^(\S+) (\d+)-(\d+) (\S+)(?: ([\d.]+)(?:\/([\d.]+))?)?( NR)?$/);
+  const homeInn = m[5] ? +m[5] : "";
+  const awayInn = m[6] ? +m[6] : homeInn;
+  return { home: m[1], hr: +m[2], ar: +m[3], away: m[4], homeInn, awayInn, noResult: !!m[7] };
 };
 // Results come from a vm context, so copy them into this realm before deepEqual
 const plain = (v) => JSON.parse(JSON.stringify(v));
@@ -32,7 +36,8 @@ test("points: win 2, draw 1, loss 0; stats accumulate", () => {
   assert.deepEqual(order(res), ["A", "C", "B"]);
   assert.deepEqual(
     row(res, "A"),
-    { pos: 1, team: "A", gp: 2, w: 2, l: 0, d: 0, pts: 4, rs: 9, ra: 4, inn: 12, note: "", unresolved: false }
+    { pos: 1, team: "A", gp: 2, w: 2, l: 0, d: 0, pts: 4, rs: 9, ra: 4, defOuts: 36, batOuts: 36,
+      pct: 100, raRate: 4 / 12, tqb: 9 / 12 - 4 / 12, note: "", unresolved: false }
   );
   assert.equal(row(res, "B").pts, 1);
   assert.equal(row(res, "C").pts, 1);
@@ -111,13 +116,14 @@ test("RA ratio uses 6 innings per LL game and more for extra innings (rule book:
   const games = [g("A 0-2 X"), g("A 0-2 Y"), g("A 0-2 Z"), g("A 0-2 W")];
   const res = computeLadder(["A", "X", "Y", "Z", "W"], games, 6);
   assert.equal(row(res, "A").ra, 8);
-  assert.equal(row(res, "A").inn, 24);
+  assert.equal(row(res, "A").defOuts, 24 * 3);
+  assert.equal(row(res, "A").raRate.toFixed(4), "0.3333");
 
   const extra = computeLadder(["A", "B"], [g("A 3-2 B 8")], 6);
-  assert.equal(row(extra, "A").inn, 8);
-  // Shortened games still count as regulation
+  assert.equal(row(extra, "A").defOuts, 8 * 3);
+  // Shortened games still count as regulation under LL
   const short = computeLadder(["A", "B"], [g("A 12-0 B 4")], 7);
-  assert.equal(row(short, "A").inn, 7);
+  assert.equal(row(short, "A").defOuts, 7 * 3);
 });
 
 test("level on all-games RA -> head-to-head among those teams", () => {
@@ -160,4 +166,105 @@ test("invalid rows are ignored: unknown team, same team", () => {
   const res = computeLadder(["A", "B"], [g("A 1-0 Z"), g("A 1-0 A"), g("A 1-0 B")], 6);
   assert.equal(res.counted, 1);
   assert.equal(row(res, "A").gp, 1);
+});
+
+test("LL: a game with no official result is excluded", () => {
+  const res = computeLadder(["A", "B"], [g("A 5-0 B NR"), g("B 2-1 A")], 6);
+  assert.equal(res.excluded, 1);
+  assert.equal(row(res, "A").gp, 1);
+  assert.equal(order(res)[0], "B");
+});
+
+// ── Points % rule set ────────────────────────────────────────────────────────
+
+test("innings notation: 5.1 and 5.2 are thirds; blank is regulation", () => {
+  assert.equal(inningsToOuts("", 7), 21);
+  assert.equal(inningsToOuts(5, 7), 15);
+  assert.equal(inningsToOuts(5.1, 7), 16);
+  assert.equal(inningsToOuts(5.2, 7), 17);
+});
+
+test("default rule set: LL for Little League divisions, PCT for the others", () => {
+  for (const d of ["LL", "IL", "JL", "SL"]) assert.equal(getDefaultLadderSystem(d), "LL");
+  for (const d of ["AYC U16", "AYC U18", "AWC", "AYWC"]) assert.equal(getDefaultLadderSystem(d), "PCT");
+});
+
+test("PCT: rule examples - 4-1 = 80%, 4-2 = 66.7%; ranks on % not points", () => {
+  const games = [
+    g("A 1-0 X"), g("A 1-0 X"), g("A 1-0 X"), g("A 1-0 X"), g("A 0-1 X"),          // A 4-1
+    g("B 1-0 X"), g("B 1-0 X"), g("B 1-0 X"), g("B 1-0 X"), g("B 0-1 X"), g("B 0-1 X"), // B 4-2
+  ];
+  const res = computeLadder(["B", "A", "X"], games, 7, "PCT");
+  assert.equal(row(res, "A").pct, 80);
+  assert.equal(row(res, "B").pct.toFixed(1), "66.7");
+  assert.equal(row(res, "A").pts, row(res, "B").pts); // both 8 points
+  assert.deepEqual(order(res).slice(0, 2), ["A", "B"]);
+});
+
+test("PCT: abandoned game without an official result is excluded from % and tiebreakers", () => {
+  const res = computeLadder(["A", "B"], [g("A 1-0 B"), g("A 0-9 B 2 NR")], 7, "PCT");
+  assert.equal(row(res, "A").gp, 1);
+  assert.equal(row(res, "A").pct, 100);
+  assert.equal(row(res, "A").ra, 0);
+  assert.equal(res.excluded, 1);
+});
+
+test("PCT: tie on % -> lower runs allowed per inning defended", () => {
+  // A and B both 1-1. A allowed 3 in 14 inn, B allowed 5 in 14 inn.
+  const games = [g("A 2-1 C"), g("C 2-0 A"), g("B 6-4 C"), g("C 1-0 B")];
+  const res = computeLadder(["B", "A", "C"], games, 7, "PCT");
+  const ab = order(res).filter((t) => t !== "C");
+  assert.deepEqual(ab, ["A", "B"]);
+  assert.equal(row(res, "A").note, "Runs allowed per inning");
+});
+
+test("PCT: innings defended come from the opponent's innings batted", () => {
+  // Home team A leads, does not bat in the 7th: A batted 6, B batted 7.
+  // A defended 7 innings, B defended 6.
+  const res = computeLadder(["A", "B"], [g("A 3-1 B 6/7")], 7, "PCT");
+  assert.equal(row(res, "A").batOuts, 18);
+  assert.equal(row(res, "A").defOuts, 21);
+  assert.equal(row(res, "B").batOuts, 21);
+  assert.equal(row(res, "B").defOuts, 18);
+  assert.equal(row(res, "B").raRate, 3 / 6);
+});
+
+test("PCT: same % and same RA/inning -> higher TQB", () => {
+  // A and B 1-1, both allowed 4 runs in 14 innings; A scored more.
+  const games = [g("A 9-2 C"), g("C 2-0 A"), g("B 3-2 C"), g("C 2-1 B")];
+  const res = computeLadder(["B", "A", "C"], games, 7, "PCT");
+  assert.equal(row(res, "A").raRate, row(res, "B").raRate);
+  assert.ok(row(res, "A").pos < row(res, "B").pos);
+  assert.equal(row(res, "A").note, "TQB");
+  assert.equal(row(res, "B").note, "TQB");
+});
+
+test("PCT: partial innings count exactly (walk-off with 1 out in the 7th)", () => {
+  // Home B wins 4-3 in the bottom of the 7th with 1 out: B batted 6.1, C batted 7
+  const res = computeLadder(["B", "C"], [g("B 4-3 C 6.1/7")], 7, "PCT");
+  assert.equal(row(res, "B").batOuts, 19);
+  assert.equal(row(res, "B").defOuts, 21);
+  assert.equal(row(res, "C").defOuts, 19);
+  // B TQB = 4 / (19/3) - 3 / 7
+  assert.ok(Math.abs(row(res, "B").tqb - (12 / 19 - 3 / 7)) < 1e-12);
+});
+
+test("PCT: level on everything -> coin toss flagged", () => {
+  const res = computeLadder(["A", "B"], [g("A 2-1 B"), g("B 2-1 A")], 7, "PCT");
+  assert.ok(res.rows.every((r) => r.unresolved && r.note === "⚠️ Coin toss"));
+});
+
+test("PCT: head-to-head is ignored", () => {
+  // All 1-1. A beat B head-to-head, but B allowed fewer runs per inning (1 v 9).
+  // B and C level on RA/inn (1 each); C has the higher TQB.
+  const games = [g("A 1-0 B"), g("C 9-0 A"), g("B 1-0 C")];
+  const res = computeLadder(["A", "B", "C"], games, 7, "PCT");
+  assert.deepEqual(order(res), ["C", "B", "A"]);
+  assert.equal(row(res, "C").note, "TQB");
+  assert.equal(row(res, "A").note, "Runs allowed per inning");
+});
+
+test("PCT: no games yet -> no coin toss flags", () => {
+  const res = computeLadder(["A", "B"], [], 7, "PCT");
+  assert.ok(res.rows.every((r) => !r.unresolved && r.note === "No games played yet"));
 });
